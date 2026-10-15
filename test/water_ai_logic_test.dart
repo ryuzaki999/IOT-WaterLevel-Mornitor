@@ -26,17 +26,8 @@ void main() {
   final String fullDay2 = dateKeyOf(DateTime(now.year, now.month, now.day - 2));
   final String fullDay3 = dateKeyOf(DateTime(now.year, now.month, now.day - 3));
 
-  final todayTs = DateTime(
-    now.year,
-    now.month,
-    now.day,
-    7,
-    15,
-  ).millisecondsSinceEpoch;
-  final yesterdayTs = todayTs - const Duration(days: 1).inMilliseconds;
-
   group('WaterContextWatcher.parseSnapshot', () {
-    test('อ่านค่า setting / monitor / history / activities ได้ถูกต้อง', () {
+    test('อ่านค่า setting / monitor / history ได้ถูกต้อง', () {
       final snapshot = WaterContextWatcher.parseSnapshot(<String, dynamic>{
         'setting': <String, dynamic>{'tank_depth': 93, 'tank_capacity': 400},
         'monitor': <String, dynamic>{
@@ -53,18 +44,6 @@ void main() {
           },
           fullDay1: <String, dynamic>{'used_liters': 60},
         },
-        'activities': <String, dynamic>{
-          'a1': <String, dynamic>{
-            'type': 'shower',
-            'liters': 30,
-            'timestamp': todayTs,
-          },
-          'a2': <String, dynamic>{
-            'type': 'laundry',
-            'liters': 80,
-            'timestamp': yesterdayTs, // เมื่อวาน → ต้องถูกตัดออก
-          },
-        },
       });
 
       expect(snapshot.hasData, isTrue);
@@ -80,10 +59,6 @@ void main() {
       expect(snapshot.hourlyToday.length, 2);
       expect(snapshot.hourlyToday.first.hour, '06'); // เรียงตามชั่วโมง
       expect(snapshot.activeHoursToday, 2);
-
-      expect(snapshot.activitiesToday.length, 1);
-      expect(snapshot.activitiesToday.first.label, 'อาบน้ำ');
-      expect(snapshot.activitiesToday.first.timeLabel, '07:15');
 
       // 📅 ค่าเฉลี่ย/วัน นับเฉพาะ "วันเต็มวัน" → วันนี้ (40 ลิตร) ต้องไม่ถูกนำมาหาร
       expect(snapshot.recordedDays, 1);
@@ -264,7 +239,6 @@ void main() {
         flowRate: 2.5,
         usedToday: 0,
         hourlyToday: <HourlyUsage>[],
-        activitiesToday: <ActivityEntry>[],
         averageDailyLiters: 0,
         recordedDays: 0,
         peakDayLabel: null,
@@ -291,7 +265,6 @@ void main() {
         flowRate: 0,
         usedToday: 10,
         hourlyToday: <HourlyUsage>[],
-        activitiesToday: <ActivityEntry>[],
         averageDailyLiters: 0,
         recordedDays: 0,
         peakDayLabel: null,
@@ -325,7 +298,6 @@ void main() {
         flowRate: 0,
         usedToday: 0,
         hourlyToday: <HourlyUsage>[],
-        activitiesToday: <ActivityEntry>[],
         averageDailyLiters: 0,
         recordedDays: 0,
         peakDayLabel: null,
@@ -388,7 +360,6 @@ void main() {
       required AiState state,
       double percent = 60.0,
       double flowRate = 0.0,
-      int lastActivityTs = 0,
       bool hasApiKey = true,
       bool hasData = true,
       bool isAnalyzing = false,
@@ -403,7 +374,6 @@ void main() {
         isAnalyzing: isAnalyzing,
         percent: percent,
         flowRate: flowRate,
-        lastActivityTs: lastActivityTs,
       );
     }
 
@@ -428,9 +398,8 @@ void main() {
         lastSuccessAt: minutesAgo(61),
         lastPercent: 60.0,
         lastFlow: 0.0,
-        lastActivityTs: 0,
       );
-      // เปอร์เซ็นต์ขยับไม่ถึง 1 และไม่มีกิจกรรมใหม่ → ไม่ยิงเปล่า
+      // เปอร์เซ็นต์ขยับไม่ถึง 1 → ไม่ยิงเปล่า
       expect(autoAt(state: state, percent: 60.4), AiSkipReason.noChange);
     });
 
@@ -443,20 +412,6 @@ void main() {
       );
       expect(autoAt(state: state, percent: 61.5), AiSkipReason.none);
       expect(autoAt(state: state, percent: 58.5), AiSkipReason.none);
-    });
-
-    test('มีกิจกรรมการใช้น้ำใหม่ แม้เปอร์เซ็นต์เท่าเดิม → ยิง', () {
-      final AiState state = AiState(
-        lastAttemptAt: minutesAgo(61),
-        lastSuccessAt: minutesAgo(61),
-        lastPercent: 60.0,
-        lastFlow: 0.0,
-        lastActivityTs: minutesAgo(70),
-      );
-      expect(
-        autoAt(state: state, percent: 60.0, lastActivityTs: minutesAgo(5)),
-        AiSkipReason.none,
-      );
     });
 
     test('น้ำเริ่มไหล (สถานะเปลี่ยน) → ยิง', () {
@@ -565,7 +520,6 @@ void main() {
         lastSuccessAt: 222,
         lastPercent: 61.5,
         lastFlow: 1.25,
-        lastActivityTs: 333,
         lastNarrative: 'น้ำเหลือ 61.5% ใช้ได้อีก 2 วัน',
         lastTips: <String>['ปิดก๊อกตอนแปรงฟัน', 'ตรวจท่อรั่ว'],
         lastForecast: 'วัน|1|60|info|ปกติ\nหมด|-|-',
@@ -576,7 +530,6 @@ void main() {
       expect(back.lastSuccessAt, 222);
       expect(back.lastPercent, 61.5);
       expect(back.lastFlow, 1.25);
-      expect(back.lastActivityTs, 333);
       expect(back.lastNarrative, 'น้ำเหลือ 61.5% ใช้ได้อีก 2 วัน');
       expect(back.lastTips, <String>['ปิดก๊อกตอนแปรงฟัน', 'ตรวจท่อรั่ว']);
       expect(back.lastForecast, 'วัน|1|60|info|ปกติ\nหมด|-|-');
@@ -626,57 +579,6 @@ void main() {
         ),
         AiSkipReason.noChange,
       );
-    });
-  });
-
-  group('summarizeActivitiesByType — สรุปการ์ด "สรุปการใช้น้ำ"', () {
-    ActivityEntry act(String type, double liters, int minute) => ActivityEntry(
-      typeId: type,
-      liters: liters,
-      timestamp: todayTs + minute * 60000,
-    );
-
-    test('ยังไม่มีกิจกรรม → ลิสต์ว่าง', () {
-      expect(summarizeActivitiesByType(const <ActivityEntry>[]), isEmpty);
-    });
-
-    test('รวมลิตรของประเภทเดียวกัน แล้วเรียงมาก → น้อย', () {
-      final List<ActivityUsage> ranked = summarizeActivitiesByType(
-        <ActivityEntry>[
-          act('shower', 40, 0),
-          act('laundry', 90, 5),
-          act('shower', 30, 10), // shower รวม = 70
-          act('plants', 10, 15),
-        ],
-      );
-
-      expect(
-        ranked.map((ActivityUsage u) => u.label).toList(),
-        <String>['ซักผ้า', 'อาบน้ำ', 'รดน้ำต้นไม้'],
-      );
-      expect(ranked.first.liters, 90);
-      expect(ranked[1].liters, 70); // ยืนยันว่ารวมลิตร ไม่ได้ดูแค่รายการเดียว
-      expect(ranked.last.liters, 10);
-    });
-
-    test('ลิตรเท่ากัน → ประเภทที่ปรากฏก่อนมาก่อน (ผลลัพธ์คงที่)', () {
-      final List<ActivityUsage> ranked = summarizeActivitiesByType(
-        <ActivityEntry>[act('dishes', 20, 0), act('shower', 20, 5)],
-      );
-
-      expect(
-        ranked.map((ActivityUsage u) => u.label).toList(),
-        <String>['ล้างจาน', 'อาบน้ำ'],
-      );
-    });
-
-    test('ประเภทที่ไม่รู้จัก → ใช้ typeId เดิมเป็นป้ายชื่อ', () {
-      final List<ActivityUsage> ranked = summarizeActivitiesByType(
-        <ActivityEntry>[act('garden', 5, 0)],
-      );
-
-      expect(ranked.single.label, 'garden');
-      expect(ranked.single.typeId, 'garden');
     });
   });
 }

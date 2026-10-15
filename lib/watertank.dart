@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'history.dart'; // นำเข้าหน้า HistoryPage เพื่อใช้ใน BottomNavigationBar
 import 'notification.dart'; // นำเข้าหน้า NotificationPage เพื่อใช้ใน BottomNavigationBar
-import 'active.dart'; // นำเข้าหน้า ActivityPage เพื่อใช้ใน BottomNavigationBar
 import 'ai_page.dart'; // นำเข้าหน้า AiPage (ผู้ช่วย AI วิเคราะห์การใช้น้ำ)
 import 'notification_service.dart'; // ระบบเขียนการแจ้งเตือนอัตโนมัติ + เฝ้าดูสถานะถังน้ำ
 
@@ -27,7 +26,7 @@ class _WaterTankPageState extends State<WaterTankPage>
   late final TankAlertWatcher _alertWatcher;
 
   // ตัวแปรสำหรับเก็บข้อมูลเรียลไทม์ที่ดึงมาจาก Firebase
-  int _currentLiters = 0;
+  double _currentLiters = 0;
   double _flowRate = 0.0;
   double _maxCapacity = 400.0;
   bool _isLoading = true;
@@ -128,7 +127,7 @@ class _WaterTankPageState extends State<WaterTankPage>
                 : {};
 
             setState(() {
-              _currentLiters = monitorData['water_level_liters'] ?? 0;
+              _currentLiters = (monitorData['water_level_liters'] ?? 0).toDouble();
               _flowRate = (monitorData['flow_rate_min'] ?? 0.0).toDouble();
               _maxCapacity = (settingData['tank_capacity'] ?? 400.0).toDouble();
               _isLoading = false;
@@ -154,7 +153,7 @@ class _WaterTankPageState extends State<WaterTankPage>
   void _handleTankAlert(TankAlert alert) {
     if (!mounted) return;
     // ถ้าผู้ใช้เปิดหน้าจอการแจ้งเตือนอยู่แล้ว ก็ไม่ต้องเด้งซ้ำ
-    if (_selectedIndex == 4) return;
+    if (_selectedIndex == 3) return;
 
     // 🎨 ใช้สี/ไอคอนชุดเดียวกับหน้าแจ้งเตือน (notification.dart) กันข้อความไม่ตรงกัน
     final Color color = notificationColorFor(alert.type);
@@ -200,7 +199,7 @@ class _WaterTankPageState extends State<WaterTankPage>
           label: 'ดูทั้งหมด',
           textColor: Colors.white,
           onPressed: () {
-            if (mounted) setState(() => _selectedIndex = 4);
+            if (mounted) setState(() => _selectedIndex = 3);
           },
         ),
       ),
@@ -303,7 +302,7 @@ class _WaterTankPageState extends State<WaterTankPage>
               icon: Icons.notifications_none_rounded,
               tooltip: 'การแจ้งเตือน',
               badgeCount: _unreadCount,
-              onTap: () => setState(() => _selectedIndex = 4),
+              onTap: () => setState(() => _selectedIndex = 3),
             ),
           ),
         ],
@@ -314,9 +313,8 @@ class _WaterTankPageState extends State<WaterTankPage>
         children: [
           _buildMainWaterTankView(), // ดัชนี 0: หน้าถังน้ำเรียลไทม์
           const HistoryPage(), // ดัชนี 1: หน้าจอประวัติการใช้น้ำ
-          const ActivityPage(), // ดัชนี 2: หน้าจอกิจกรรม
-          AiPage(isActive: _selectedIndex == 3), // ดัชนี 3: หน้าจอผู้ช่วย AI (หยุดวิเคราะห์อัตโนมัติเมื่อไม่ได้เปิดแท็บนี้)
-          const NotificationPage(), // ดัชนี 4: หน้าจอการแจ้งเตือน
+          AiPage(isActive: _selectedIndex == 2), // ดัชนี 2: หน้าจอผู้ช่วย AI (หยุดวิเคราะห์อัตโนมัติเมื่อไม่ได้เปิดแท็บนี้)
+          const NotificationPage(), // ดัชนี 3: หน้าจอการแจ้งเตือน
         ],
       ),
 
@@ -358,11 +356,6 @@ class _WaterTankPageState extends State<WaterTankPage>
               icon: Icon(Icons.insert_chart_outlined_rounded),
               activeIcon: Icon(Icons.insert_chart_rounded),
               label: 'ประวัติ',
-            ),
-            BottomNavigationBarItem(
-              icon: Icon(Icons.bolt_outlined),
-              activeIcon: Icon(Icons.bolt),
-              label: 'กิจกรรม',
             ),
             BottomNavigationBarItem(
               icon: Icon(Icons.smart_toy_outlined),
@@ -774,7 +767,7 @@ class _WaterTankPageState extends State<WaterTankPage>
                                     ),
                                     const SizedBox(height: 2),
                                     Text(
-                                      '$_currentLiters / ${_maxCapacity.toInt()} ลิตร',
+                                      '${_currentLiters.toStringAsFixed(1)} / ${_maxCapacity.toInt()} ลิตร',
                                       style: TextStyle(
                                         fontSize: 18,
                                         fontWeight: FontWeight.bold,
@@ -907,10 +900,8 @@ class _WaterTankPageState extends State<WaterTankPage>
       case 1:
         return 'ประวัติการใช้น้ำ';
       case 2:
-        return 'กิจกรรม';
-      case 3:
         return 'ผู้ช่วย AI วิเคราะห์การใช้น้ำ';
-      case 4:
+      case 3:
         return 'การแจ้งเตือน';
       default:
         return 'Water Tank IoT';

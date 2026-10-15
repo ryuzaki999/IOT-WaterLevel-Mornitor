@@ -1,13 +1,16 @@
 /* ============================================================
    Water Tank IoT - ESP32 + HC-SR04 + OLED SSD1306 + Firebase
    WiFi: จัดการด้วย WiFiManager (tzapu)
-
    โหมดใช้งานจริง (TEST_PORTAL ปิดอยู่)
    บอร์ดจะต่อ WiFi เดิมที่เคยตั้งไว้อัตโนมัติเมื่อบูต ถ้าต่อไม่ติดค่อยเปิดหน้า
    ตั้งค่าให้เอง ถ้าจะทดสอบเปลี่ยน WiFi ให้ไปเปิดบรรทัด #define TEST_PORTAL
    ด้านล่างใหม่ (เอา // ออก) แล้วอย่าลืมปิดกลับก่อนใช้งานจริงอีกครั้ง
-   ============================================================ */
 
+   - รองรับความจุถัง 2 - 10,000 ลิตร (แก้ช่วงได้ที่ MIN_/MAX_CAPACITY)
+   - อ่านระดับน้ำแบบกรอง 3 ชั้น: มัธยฐาน 7 ค่า -> EMA -> easing animation
+   - ไม่มีการตรวจการไหลในบอร์ดนี้แล้ว (ใช้บอร์ด flow sensor แยก)
+   - เวอร์ชัน "ทศนิยม": แสดง/ส่งลิตรเป็นทศนิยม 1 ตำแหน่ง (เหมาะกับขวด/ถังเล็ก)
+   ============================================================ */
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
@@ -15,66 +18,71 @@
 #include <WiFiManager.h>          // ติดตั้ง "WiFiManager" by tzapu
 #include <FirebaseESP32.h>
 #include <EEPROM.h>
-
 // ---------- โหมดทดสอบ ----------
 // #define TEST_PORTAL             // <<< ปิดแล้ว (โหมดใช้งานจริง) เปิดใหม่ได้ถ้าต้องทดสอบ WiFi
-
 // ---------- Firebase ----------
 #define FIREBASE_HOST "water-tank-iot-8c113-default-rtdb.asia-southeast1.firebasedatabase.app"
 #define FIREBASE_AUTH "qKEAYzn9dc31GnN38eAaHFtmUWcIxyilFFh43beN"
-
 // ---------- WiFiManager ----------
 #define AP_NAME            "WaterTank-Setup"   // ชื่อ WiFi ที่บอร์ดปล่อยตอนตั้งค่า
 #define AP_PASSWORD        "12345678"          // รหัสเข้า AP (ต้อง >= 8 ตัว)
 #define PORTAL_TIMEOUT_SEC 180                 // ไม่มีใครตั้งค่าใน 3 นาที -> ทำงานต่อ
 #define CONNECT_TIMEOUT_SEC 20                 // รอต่อ WiFi เดิม 20 วิ
-
 // ---------- OLED ----------
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
 #define OLED_RESET -1
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
-
 // ---------- ขา ----------
 #define TRIG_PIN   25
 #define ECHO_PIN   18
 #define BUTTON_PIN 0     // ปุ่ม BOOT: กดค้าง 3 วิ = ล้างค่า WiFi
-
 #define EEPROM_SIZE 8    // float 2 ตัว x 4 bytes
+// ---------- ช่วงค่าที่ยอมรับ ----------
+#define MIN_CAPACITY  2.0      // ลิตร
+#define MAX_CAPACITY  10000.0  // ลิตร
+#define MIN_DEPTH     3.0      // ซม.
+#define MAX_DEPTH     500.0    // ซม.
+// ---------- การกรองค่าเซนเซอร์ ----------
+#define SAMPLE_COUNT   7       // จำนวนค่าที่ใช้หามัธยฐาน (เลขคี่)
+#define EMA_ALPHA      0.2     // 0.1 = นิ่งมากแต่ตอบสนองช้า / 0.4 = ไวแต่แกว่งกว่า
+#define EASE_FACTOR    0.15    // ความเร็วแอนิเมชันบนจอ
+#define SOUND_CM_PER_US 0.0349 // ความเร็วเสียงที่ ~30°C (0.0343 ที่ 20°C)
 
 FirebaseData firebaseData;
 FirebaseConfig config;
 FirebaseAuth auth;
-
 bool firebaseReady = false;
-
 float TANK_DEPTH    = 114.0;
 float TANK_CAPACITY = 400.0;
-
-float previousWaterHeight = 0.0;
-float smoothPercent       = 0.0;
-int   rawWaterPercent     = 0;
-float currentWaterHeight  = 0.0;
-
 const float SAFE_ZONE = 2.5;
 
-unsigned long lastSensorReadTime    = 0;
-unsigned long lastFlowCheckTime     = 0;
+// ค่าระดับน้ำ
+float samples[SAMPLE_COUNT];
+int   sampleIdx    = 0;
+int   sampleFilled = 0;
+int   sensorFailCount = 0;
+float filteredHeight  = -1;    // -1 = ยังไม่มีค่า
+float rawWaterPercent = 0.0;   // เป้าหมายที่ผ่านการกรองแล้ว
+float smoothPercent   = 0.0;   // ค่าที่ใช้วาดบนจอ (ค่อยๆ วิ่งเข้าหา rawWaterPercent)
+
+// ส่ง Firebase เฉพาะตอนค่าเปลี่ยน (ทศนิยม 1 ตำแหน่ง)
+float lastSentLiters = -1;
+unsigned long lastSendTime = 0;
+
+unsigned long lastSampleTime        = 0;
+unsigned long lastUploadTime        = 0;
 unsigned long lastFirebaseCheckTime = 0;
 unsigned long lastWifiCheckTime     = 0;
-
-const unsigned long SENSOR_READ_INTERVAL    = 1000;
-const unsigned long FLOW_CHECK_INTERVAL     = 5000;
-const unsigned long FIREBASE_CHECK_INTERVAL = 3000;
+const unsigned long SAMPLE_INTERVAL         = 100;    // อ่านเซนเซอร์ทุก 100 ms
+const unsigned long UPLOAD_INTERVAL         = 1000;   // เช็คว่าต้องส่งค่าขึ้น Firebase ทุก 1 วิ
+const unsigned long FORCE_SEND_INTERVAL     = 30000;  // ส่งซ้ำอย่างน้อยทุก 30 วิ แม้ค่าไม่เปลี่ยน
+const unsigned long FIREBASE_CHECK_INTERVAL = 10000;  // ดึงค่าตั้งค่าจากแอปทุก 10 วิ
 const unsigned long WIFI_CHECK_INTERVAL     = 10000;
-
 // ปุ่มกดค้างเพื่อล้าง WiFi
 const unsigned long RESET_HOLD_MS = 3000;      // อยากให้กดนานขึ้นก็เพิ่มเลขนี้
 unsigned long buttonHoldStart = 0;
 bool buttonWasDown = false;
-
-String flowStatus = "NO FLOW";
-
 // -------------------------------------------------------
 // แสดงข้อความ 3 บรรทัดบน OLED
 void showMessage(String l1, String l2, String l3) {
@@ -86,14 +94,12 @@ void showMessage(String l1, String l2, String l3) {
   display.setCursor(0, 42); display.print(l3);
   display.display();
 }
-
 // -------------------------------------------------------
 // WiFiManager เรียกอัตโนมัติเมื่อเข้าโหมดตั้งค่า
 void configModeCallback(WiFiManager *myWiFiManager) {
   Serial.println("[WiFi] เข้าโหมดตั้งค่า - ต่อมือถือเข้า " AP_NAME);
   showMessage("SETUP WiFi", AP_NAME, "IP 192.168.4.1");
 }
-
 // -------------------------------------------------------
 // เริ่ม Firebase (เรียกซ้ำได้ ทำงานจริงครั้งเดียว)
 void initFirebase() {
@@ -102,6 +108,7 @@ void initFirebase() {
   config.signer.tokens.legacy_token = FIREBASE_AUTH;
   Firebase.begin(&config, &auth);
   Firebase.reconnectWiFi(true);
+  Firebase.setFloatDigits(1);   // ส่งค่า float ขึ้น Firebase เป็นทศนิยม 1 ตำแหน่ง
   firebaseReady = true;
   Serial.println("=================================");
   Serial.println("บอร์ดออนไลน์สำเร็จ!");
@@ -109,7 +116,6 @@ void initFirebase() {
   Serial.print("IP  : "); Serial.println(WiFi.localIP());
   Serial.println("=================================");
 }
-
 // -------------------------------------------------------
 // กดปุ่ม BOOT ค้าง 3 วิ = ลืมรหัส WiFi แล้วรีสตาร์ทเข้าโหมดตั้งค่า
 void handleWiFiResetButton() {
@@ -129,7 +135,6 @@ void handleWiFiResetButton() {
     buttonWasDown = false;
   }
 }
-
 // -------------------------------------------------------
 float readUltrasonic() {
   digitalWrite(TRIG_PIN, LOW);
@@ -139,9 +144,59 @@ float readUltrasonic() {
   digitalWrite(TRIG_PIN, LOW);
   long duration = pulseIn(ECHO_PIN, HIGH, 30000);
   if (duration == 0) return 0;
-  return duration * 0.034 / 2;
+  return duration * SOUND_CM_PER_US / 2;
 }
+// -------------------------------------------------------
+// หาค่ามัธยฐานจากค่าที่เก็บไว้ (ตัดค่าเพี้ยนที่โผล่มาครั้งเดียวทิ้ง)
+float getMedian() {
+  float t[SAMPLE_COUNT];
+  for (int i = 0; i < sampleFilled; i++) t[i] = samples[i];
+  for (int i = 1; i < sampleFilled; i++) {          // insertion sort
+    float k = t[i];
+    int j = i - 1;
+    while (j >= 0 && t[j] > k) { t[j + 1] = t[j]; j--; }
+    t[j + 1] = k;
+  }
+  return t[sampleFilled / 2];
+}
+// -------------------------------------------------------
+// ล้างค่าที่กรองไว้ (ใช้ตอนเปลี่ยนขนาดถัง ให้ค่าใหม่ขึ้นทันที)
+void resetFilter() {
+  sampleIdx      = 0;
+  sampleFilled   = 0;
+  filteredHeight = -1;
+}
+// -------------------------------------------------------
+// อ่านเซนเซอร์ 1 ครั้ง แล้วอัปเดตค่าระดับน้ำที่กรองแล้ว
+void updateWaterLevel() {
+  float d = readUltrasonic();
 
+  // ตัดค่าที่เป็นไปไม่ได้ (อ่านพลาด / ไกลเกินก้นถัง)
+  if (d <= 0 || d > TANK_DEPTH + SAFE_ZONE + 20) {
+    sensorFailCount++;
+    if (sensorFailCount == 20) {   // พลาดติดกัน ~2 วิ ค่อยแจ้ง จะได้ไม่รก Serial
+      Serial.println("[Sensor] อ่านค่า HC-SR04 ไม่สำเร็จต่อเนื่อง - ใช้ค่าล่าสุดไปก่อน");
+    }
+    return;
+  }
+  sensorFailCount = 0;
+
+  samples[sampleIdx] = d;
+  sampleIdx = (sampleIdx + 1) % SAMPLE_COUNT;
+  if (sampleFilled < SAMPLE_COUNT) sampleFilled++;
+  if (sampleFilled < 3) return;    // รอให้มีข้อมูลพอก่อน
+
+  float effectiveDistance = getMedian() - SAFE_ZONE;
+  if (effectiveDistance < 0) effectiveDistance = 0;
+  float h = TANK_DEPTH - effectiveDistance;
+  h = constrain(h, 0.0f, TANK_DEPTH);
+
+  // EMA: ค่อยๆ ขยับเข้าหาค่าใหม่ ไม่กระโดด
+  if (filteredHeight < 0) filteredHeight = h;
+  else                    filteredHeight += EMA_ALPHA * (h - filteredHeight);
+
+  rawWaterPercent = filteredHeight / TANK_DEPTH * 100.0;
+}
 // -------------------------------------------------------
 void drawWaterTank(int x, int y, int w, int h, int percent) {
   display.drawRoundRect(x, y, w, h, 4, SSD1306_WHITE);
@@ -154,43 +209,35 @@ void drawWaterTank(int x, int y, int w, int h, int percent) {
     display.fillRect(x + 2, y + (h - 2) - fillH, w - 4, fillH, SSD1306_WHITE);
   }
 }
-
 // -------------------------------------------------------
 void setup() {
   Serial.begin(115200);
   EEPROM.begin(EEPROM_SIZE);
-
   pinMode(TRIG_PIN, OUTPUT);
   pinMode(ECHO_PIN, INPUT);
   pinMode(BUTTON_PIN, INPUT_PULLUP);
-
   if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) { for (;;); }
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
-
   // ---- โหลดค่าที่บันทึกไว้จาก EEPROM ----
   float savedDepth, savedCapacity;
   EEPROM.get(0, savedDepth);
   EEPROM.get(4, savedCapacity);
-
-  if (!isnan(savedDepth) && savedDepth > 10.0 && savedDepth < 500.0) {
+  if (!isnan(savedDepth) && savedDepth >= MIN_DEPTH && savedDepth <= MAX_DEPTH) {
     TANK_DEPTH = savedDepth;
     Serial.printf("[EEPROM] โหลด TANK_DEPTH = %.1f ซม.\n", TANK_DEPTH);
   }
-  if (!isnan(savedCapacity) && savedCapacity > 10.0 && savedCapacity < 50000.0) {
+  if (!isnan(savedCapacity) && savedCapacity >= MIN_CAPACITY && savedCapacity <= MAX_CAPACITY) {
     TANK_CAPACITY = savedCapacity;
-    Serial.printf("[EEPROM] โหลด TANK_CAPACITY = %.0f ลิตร\n", TANK_CAPACITY);
+    Serial.printf("[EEPROM] โหลด TANK_CAPACITY = %.1f ลิตร\n", TANK_CAPACITY);
   }
-
   // ---- เชื่อม WiFi ด้วย WiFiManager ----
   WiFiManager wm;
   wm.setAPCallback(configModeCallback);
   wm.setConfigPortalTimeout(PORTAL_TIMEOUT_SEC);
   wm.setConnectTimeout(CONNECT_TIMEOUT_SEC);
   wm.setTitle("Water Tank IoT");
-
   bool ok;
-
 #ifdef TEST_PORTAL
   // โหมดทดสอบ: เปิดหน้าตั้งค่าทันทีทุกครั้ง ไม่สนรหัสเก่า
   // (ไม่ลบรหัสเก่าทิ้ง - ถ้าเปลี่ยนใจ กด Exit ในหน้าเว็บได้)
@@ -203,7 +250,6 @@ void setup() {
   showMessage("Connecting WiFi", "please wait...", "");
   ok = wm.autoConnect(AP_NAME, AP_PASSWORD);
 #endif
-
   if (ok) {
     showMessage("WiFi CONNECTED", WiFi.SSID(), WiFi.localIP().toString());
     initFirebase();
@@ -211,14 +257,11 @@ void setup() {
     Serial.println("[WiFi] ต่อไม่สำเร็จ - ทำงานแบบ offline");
     showMessage("WiFi FAILED", "run offline", "hold BTN 3s");
   }
-
   WiFi.setAutoReconnect(true);
   delay(1500);
 }
-
 // -------------------------------------------------------
 void loop() {
-
   // กดปุ่ม BOOT ค้าง 3 วิ = เปลี่ยน WiFi ใหม่
   handleWiFiResetButton();
 
@@ -232,90 +275,70 @@ void loop() {
       initFirebase();   // เผื่อบูตมาแบบ offline แล้วเพิ่งต่อติดทีหลัง
     }
   }
-
   bool online = (WiFi.status() == WL_CONNECTED) && firebaseReady;
 
   // ---- อ่าน tank_depth / tank_capacity จาก Firebase ----
-  if (online) {
-    if (millis() - lastFirebaseCheckTime >= FIREBASE_CHECK_INTERVAL) {
+  if (online && millis() - lastFirebaseCheckTime >= FIREBASE_CHECK_INTERVAL) {
+    bool depthOk   = Firebase.getFloat(firebaseData, "/water_system/setting/tank_depth");
+    float newDepth = depthOk ? firebaseData.floatData() : -1;
+    bool capOk     = Firebase.getFloat(firebaseData, "/water_system/setting/tank_capacity");
+    float newCap   = capOk ? firebaseData.floatData() : -1;
 
-      bool depthOk   = Firebase.getFloat(firebaseData, "/water_system/setting/tank_depth");
-      float newDepth = depthOk ? firebaseData.floatData() : -1;
+    bool depthValid = depthOk && newDepth >= MIN_DEPTH    && newDepth <= MAX_DEPTH;
+    bool capValid   = capOk   && newCap   >= MIN_CAPACITY && newCap   <= MAX_CAPACITY;
 
-      bool capOk     = Firebase.getFloat(firebaseData, "/water_system/setting/tank_capacity");
-      float newCap   = capOk ? firebaseData.floatData() : -1;
-
-      if (depthOk && capOk && newDepth > 10.0 && newCap > 10.0) {
-        if (newDepth != TANK_DEPTH || newCap != TANK_CAPACITY) {
-          TANK_DEPTH    = newDepth;
-          TANK_CAPACITY = newCap;
-          EEPROM.put(0, TANK_DEPTH);
-          EEPROM.put(4, TANK_CAPACITY);
-          EEPROM.commit();
-          Serial.printf("[OK] รับค่าจากแอป: %.0f ลิตร / %.1f ซม.\n", TANK_CAPACITY, TANK_DEPTH);
-        }
-      } else {
-        if (!depthOk) Serial.println("อ่าน tank_depth ล้มเหลว: " + firebaseData.errorReason());
-        if (!capOk)   Serial.println("อ่าน tank_capacity ล้มเหลว: " + firebaseData.errorReason());
+    if (depthValid && capValid) {
+      if (newDepth != TANK_DEPTH || newCap != TANK_CAPACITY) {
+        TANK_DEPTH    = newDepth;
+        TANK_CAPACITY = newCap;
+        EEPROM.put(0, TANK_DEPTH);
+        EEPROM.put(4, TANK_CAPACITY);
+        EEPROM.commit();
+        resetFilter();          // ขนาดถังเปลี่ยน -> เริ่มกรองใหม่ ค่าใหม่ขึ้นทันที
+        lastSentLiters = -1;    // บังคับส่งค่าใหม่ขึ้น Firebase
+        Serial.printf("[OK] รับค่าจากแอป: %.1f ลิตร / %.1f ซม.\n", TANK_CAPACITY, TANK_DEPTH);
       }
-
-      lastFirebaseCheckTime = millis();
-    }
-  }
-
-  // ---- อ่านเซนเซอร์ระดับน้ำทุก 1 วินาที ----
-  if (millis() - lastSensorReadTime >= SENSOR_READ_INTERVAL) {
-    float distanceCm = readUltrasonic();
-    lastSensorReadTime = millis();
-
-    if (distanceCm <= 0) {
-      // อ่านค่าไม่สำเร็จ (มีอะไรมาบังใกล้เกินไป/ไกลเกินไป/echo timeout)
-      // ข้ามรอบนี้ไปเลย คง currentWaterHeight/rawWaterPercent ค่าล่าสุดที่เชื่อถือได้ไว้ก่อน
-      // กันไม่ให้ตีความผิดเป็นถังเต็ม 100% ทุกครั้งที่เซนเซอร์อ่านพลาด
-      Serial.println("[Sensor] อ่านค่า HC-SR04 ไม่สำเร็จ ข้ามรอบนี้");
     } else {
-      float effectiveDistance = distanceCm - SAFE_ZONE;
-      if (effectiveDistance < 0) effectiveDistance = 0;
-
-      currentWaterHeight = TANK_DEPTH - effectiveDistance;
-      if (currentWaterHeight < 0)          currentWaterHeight = 0;
-      if (currentWaterHeight > TANK_DEPTH) currentWaterHeight = TANK_DEPTH;
-
-      rawWaterPercent = (int)((currentWaterHeight / TANK_DEPTH) * 100.0);
+      if (!depthOk)         Serial.println("อ่าน tank_depth ล้มเหลว: " + firebaseData.errorReason());
+      else if (!depthValid) Serial.printf("[WARN] tank_depth %.1f ซม. อยู่นอกช่วง %.0f-%.0f\n", newDepth, MIN_DEPTH, MAX_DEPTH);
+      if (!capOk)           Serial.println("อ่าน tank_capacity ล้มเหลว: " + firebaseData.errorReason());
+      else if (!capValid)   Serial.printf("[WARN] tank_capacity %.1f ลิตร อยู่นอกช่วง %.0f-%.0f\n", newCap, MIN_CAPACITY, MAX_CAPACITY);
     }
+    lastFirebaseCheckTime = millis();
+  }
 
-    if (online) {
-      int currentLiters = (int)((rawWaterPercent / 100.0) * TANK_CAPACITY);
-      Firebase.setInt(firebaseData, "/water_system/monitor/water_level_liters", currentLiters);
-      // 🚀 ไม่เขียนค่า flow_rate ปลอมขึ้น Firebase อีกต่อไป —
-      // flow_rate_min เป็นหน้าที่ของบอร์ด flow sensor ขาเข้าเท่านั้น (inFlowSensorDevice.txt)
-      // (เดิมใช้ flowStatus ของบอร์ดนี้ปลอมค่าไว้ ทำให้ "สถานะการไหล" ในแอปขยับ
-      //  ทุกครั้งที่มีอะไรมาบัง/ขยับใกล้ตัวเซนเซอร์ ทั้งที่ไม่มีน้ำไหลจริง)
+  // ---- อ่านเซนเซอร์ทุก 100 ms (กรองค่าในตัว) ----
+  if (millis() - lastSampleTime >= SAMPLE_INTERVAL) {
+    lastSampleTime = millis();
+    updateWaterLevel();
+  }
+
+  // ---- ส่งระดับน้ำขึ้น Firebase: เฉพาะตอนค่าเปลี่ยน หรือครบ 30 วิ ----
+  if (online && filteredHeight >= 0 && millis() - lastUploadTime >= UPLOAD_INTERVAL) {
+    lastUploadTime = millis();
+    float liters = round(filteredHeight / TANK_DEPTH * TANK_CAPACITY * 10.0) / 10.0;  // ทศนิยม 1 ตำแหน่ง
+    // ส่งเมื่อค่าเปลี่ยนเกินเกณฑ์: อย่างน้อย 0.1 ลิตร หรือ 0.2% ของความจุ (ถังใหญ่จะได้ไม่ส่งถี่เกิน)
+    float sendThreshold = max(0.1f, TANK_CAPACITY * 0.002f);
+    if (lastSentLiters < 0 || fabs(liters - lastSentLiters) >= sendThreshold ||
+        millis() - lastSendTime >= FORCE_SEND_INTERVAL) {
+      if (Firebase.setFloat(firebaseData, "/water_system/monitor/water_level_liters", liters)) {
+        lastSentLiters = liters;
+        lastSendTime   = millis();
+      } else {
+        Serial.println("ส่ง water_level_liters ล้มเหลว: " + firebaseData.errorReason());
+      }
     }
   }
 
-  // ---- ตรวจการไหลของน้ำทุก 5 วินาที ----
-  if (millis() - lastFlowCheckTime >= FLOW_CHECK_INTERVAL) {
-    flowStatus = (currentWaterHeight > previousWaterHeight + 0.4) ? "FLOW" : "NO FLOW";
-    previousWaterHeight = currentWaterHeight;
-    lastFlowCheckTime   = millis();
-  }
+  // ---- Smooth animation (easing: ห่างมากขยับเร็ว ใกล้แล้วค่อยๆ ช้าลง) ----
+  smoothPercent += (rawWaterPercent - smoothPercent) * EASE_FACTOR;
+  if (fabs(rawWaterPercent - smoothPercent) < 0.05) smoothPercent = rawWaterPercent;
 
-  // ---- Smooth animation ----
-  if (smoothPercent < rawWaterPercent) {
-    smoothPercent += 0.5;
-    if (smoothPercent > rawWaterPercent) smoothPercent = rawWaterPercent;
-  } else if (smoothPercent > rawWaterPercent) {
-    smoothPercent -= 0.5;
-    if (smoothPercent < rawWaterPercent) smoothPercent = rawWaterPercent;
-  }
-
-  int displayPercent = (int)smoothPercent;
-  int waterLiters    = (int)((displayPercent / 100.0) * TANK_CAPACITY);
+  int displayPercent = (int)round(smoothPercent);
+  float waterLiters  = smoothPercent / 100.0 * TANK_CAPACITY;
 
   // ---- วาดหน้าจอ OLED ----
   display.clearDisplay();
-
   display.setTextSize(2);
   display.setCursor(4, 18);
   display.print(displayPercent);
@@ -325,27 +348,21 @@ void loop() {
   drawWaterTank(52, 6, 24, 42, displayPercent);
 
   display.setTextSize(1);
-  display.setCursor(46, 50);
+  display.setCursor(86, 18);
   display.print("H:");
   display.print((int)TANK_DEPTH);
-
-  display.setCursor(110, 50);
+  display.setCursor(86, 30);
   display.print(WiFi.status() == WL_CONNECTED ? "[ON]" : "[OFF]");
 
-  if (flowStatus == "FLOW") {
-    display.setCursor(88, 18); display.print("FLOW");
-    display.setCursor(88, 28); display.print(">>>");
-  } else {
-    display.setCursor(84, 22); display.print("NO FLOW");
-  }
-
-  display.setTextSize(1);
   display.setCursor(4, 56);
-  display.print(waterLiters);
+  display.print(waterLiters, 1);                 // เช่น 3.4 / 6 L
   display.print(" / ");
-  display.print((int)TANK_CAPACITY);
+  if (fabs(TANK_CAPACITY - round(TANK_CAPACITY)) < 0.05)
+    display.print((int)round(TANK_CAPACITY));    // ความจุเป็นเลขกลม -> ไม่ต้องมีทศนิยม
+  else
+    display.print(TANK_CAPACITY, 1);             // เช่น 5.5 L
   display.print(" L");
-
   display.display();
-  delay(50);
+
+  delay(30);
 }

@@ -18,7 +18,6 @@
 //   last_success_at:  <ms>     ครั้งล่าสุดที่ "ได้คำตอบ"
 //   last_percent:     <number> เปอร์เซ็นต์น้ำตอนยิงล่าสุด
 //   last_flow:        <number> ลิตร/นาที ตอนยิงล่าสุด
-//   last_activity_ts: <ms>     เวลากิจกรรมล่าสุดตอนยิง
 //   last_narrative:   <string> บทวิเคราะห์ล่าสุด (แสดงต่อได้หลังรีสตาร์ท)
 //   last_tips:        <string> คำแนะนำล่าสุด คั่นแต่ละข้อด้วย \n
 //   last_forecast:    <string> เนื้อความบล็อก [คาดการณ์] ล่าสุด (5 บรรทัด + หมด)
@@ -52,7 +51,6 @@ class AiState {
   final int? lastSuccessAt; // ms ที่ "ได้คำตอบ" ล่าสุด
   final double? lastPercent; // เปอร์เซ็นต์น้ำตอนยิงล่าสุด
   final double? lastFlow; // ลิตร/นาที ตอนยิงล่าสุด
-  final int? lastActivityTs; // เวลากิจกรรมล่าสุดตอนยิง
   final String? lastNarrative; // บทวิเคราะห์ล่าสุด
   final List<String> lastTips; // คำแนะนำล่าสุด
   final String? lastForecast; // เนื้อความบล็อก [คาดการณ์] ล่าสุด
@@ -62,7 +60,6 @@ class AiState {
     this.lastSuccessAt,
     this.lastPercent,
     this.lastFlow,
-    this.lastActivityTs,
     this.lastNarrative,
     this.lastTips = const <String>[],
     this.lastForecast,
@@ -85,7 +82,6 @@ class AiState {
       lastSuccessAt: _toIntOrNull(data['last_success_at']),
       lastPercent: _toDoubleOrNull(data['last_percent']),
       lastFlow: _toDoubleOrNull(data['last_flow']),
-      lastActivityTs: _toIntOrNull(data['last_activity_ts']),
       lastNarrative: narrative.isEmpty ? null : narrative,
       lastTips: tipsRaw
           .split('\n')
@@ -103,7 +99,6 @@ class AiState {
         'last_success_at': lastSuccessAt,
         'last_percent': lastPercent,
         'last_flow': lastFlow,
-        'last_activity_ts': lastActivityTs,
         'last_narrative': lastNarrative,
         'last_tips': lastTips.join('\n'),
         'last_forecast': lastForecast,
@@ -115,7 +110,6 @@ class AiState {
     int? lastSuccessAt,
     double? lastPercent,
     double? lastFlow,
-    int? lastActivityTs,
     String? lastNarrative,
     List<String>? lastTips,
     String? lastForecast,
@@ -125,7 +119,6 @@ class AiState {
       lastSuccessAt: lastSuccessAt ?? this.lastSuccessAt,
       lastPercent: lastPercent ?? this.lastPercent,
       lastFlow: lastFlow ?? this.lastFlow,
-      lastActivityTs: lastActivityTs ?? this.lastActivityTs,
       lastNarrative: lastNarrative ?? this.lastNarrative,
       lastTips: lastTips ?? this.lastTips,
       lastForecast: lastForecast ?? this.lastForecast,
@@ -202,7 +195,6 @@ bool aiHasMaterialChange({
   required AiState state,
   required double percent,
   required double flowRate,
-  required int lastActivityTs,
 }) {
   // ยังไม่เคยวิเคราะห์สำเร็จเลย → ต้องวิเคราะห์
   if (state.lastSuccessAt == null) return true;
@@ -218,9 +210,6 @@ bool aiHasMaterialChange({
   final bool wasFlowing = prevFlow > kAiFlowActiveLpm;
   final bool isFlowingNow = flowRate > kAiFlowActiveLpm;
   if (wasFlowing != isFlowingNow) return true;
-
-  // มีกิจกรรมการใช้น้ำใหม่เกิดขึ้นหลังจากที่ยิงล่าสุด
-  if (lastActivityTs > (state.lastActivityTs ?? 0)) return true;
 
   return false;
 }
@@ -238,7 +227,6 @@ AiSkipReason aiAutoDecision({
   required bool isAnalyzing,
   required double percent,
   required double flowRate,
-  required int lastActivityTs,
 }) {
   if (isAnalyzing) return AiSkipReason.busy;
   if (!hasApiKey) return AiSkipReason.noKey;
@@ -257,7 +245,6 @@ AiSkipReason aiAutoDecision({
     state: state,
     percent: percent,
     flowRate: flowRate,
-    lastActivityTs: lastActivityTs,
   );
   if (!changed) return AiSkipReason.noChange;
 

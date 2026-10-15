@@ -4,23 +4,14 @@ import 'package:flutter/foundation.dart';
 import 'package:firebase_database/firebase_database.dart';
 
 // =====================================================================
-// 📦 Firebase schema ที่ไฟล์นี้ใช้ (ตรงกับหน้าน้ำ/ประวัติ/กิจกรรม)
+// 📦 Firebase schema ที่ไฟล์นี้ใช้ (ตรงกับหน้าน้ำ/ประวัติ)
 // water_system/setting:   { tank_depth, tank_capacity }
 // water_system/monitor:   { water_level_liters, flow_rate_min }
 // water_system/history/{yyyy-MM-dd}: {
 //     used_liters: <number>,
 //     hourly: { 'HH': { used_liters: <number> } }
 // }
-// water_system/activities/{pushId}: { type, liters, timestamp }
 // =====================================================================
-
-/// 🧾 ป้ายชื่อภาษาไทยของกิจกรรมแต่ละประเภท (ตรงกับ active.dart)
-const Map<String, String> kActivityLabels = <String, String>{
-  'laundry': 'ซักผ้า',
-  'dishes': 'ล้างจาน',
-  'shower': 'อาบน้ำ',
-  'plants': 'รดน้ำต้นไม้',
-};
 
 /// 📅 ต้องมี "วันเต็มวัน" อย่างน้อยเท่านี้ จึงจะเชื่อถือค่าเฉลี่ยการใช้น้ำได้
 ///    • "วันเต็มวัน" = วันก่อนวันนี้ที่มีคีย์ใน water_system/history
@@ -37,73 +28,6 @@ class HourlyUsage {
   const HourlyUsage(this.hour, this.liters);
 }
 
-class ActivityEntry {
-  final String typeId;
-  final double liters;
-  final int timestamp;
-
-  const ActivityEntry({
-    required this.typeId,
-    required this.liters,
-    required this.timestamp,
-  });
-
-  String get label => kActivityLabels[typeId] ?? typeId;
-
-  String get timeLabel {
-    if (timestamp <= 0) return '-';
-    final d = DateTime.fromMillisecondsSinceEpoch(timestamp);
-    final hh = d.hour.toString().padLeft(2, '0');
-    final mm = d.minute.toString().padLeft(2, '0');
-    return '$hh:$mm';
-  }
-}
-
-/// 📊 ผลรวมการใช้น้ำของกิจกรรม "แต่ละประเภท" ในวันนี้
-///    ใช้สร้างสรุปบนการ์ด "สรุปการใช้น้ำ" (บอกแค่ชื่อกิจกรรม ไม่แสดงตัวเลข)
-class ActivityUsage {
-  final String typeId;
-  final double liters; // ผลรวมลิตรของกิจกรรมประเภทนี้ทั้งวัน
-
-  const ActivityUsage({required this.typeId, required this.liters});
-
-  String get label => kActivityLabels[typeId] ?? typeId;
-}
-
-/// 🏆 รวมลิตรของกิจกรรมวันนี้แยกตามประเภท แล้วเรียงจาก "ใช้มาก → ใช้น้อย"
-///    • ถ้าลิตรรวมเท่ากัน ประเภทที่ปรากฏก่อนจะคงลำดับเดิม (ผลลัพธ์นิ่ง เทสต์ได้)
-///    • ตัวเลขลิตรยังคืนมาให้ตรวจสอบ แต่การ์ดแสดงเฉพาะ label (ไม่โชว์ตัวเลข)
-///    • ยังไม่มีกิจกรรม → คืนลิสต์ว่าง
-List<ActivityUsage> summarizeActivitiesByType(List<ActivityEntry> activities) {
-  if (activities.isEmpty) return const <ActivityUsage>[];
-
-  final List<String> order = <String>[]; // ลำดับที่แต่ละประเภทปรากฏครั้งแรก
-  final Map<String, double> totals = <String, double>{};
-
-  for (final ActivityEntry a in activities) {
-    final String id = a.typeId.isEmpty ? 'unknown' : a.typeId;
-    if (!totals.containsKey(id)) {
-      totals[id] = 0;
-      order.add(id);
-    }
-    totals[id] = totals[id]! + a.liters;
-  }
-
-  final List<ActivityUsage> result = <ActivityUsage>[
-    for (final String id in order)
-      ActivityUsage(typeId: id, liters: totals[id]!),
-  ];
-
-  result.sort((ActivityUsage a, ActivityUsage b) {
-    final int byLiters = b.liters.compareTo(a.liters);
-    if (byLiters != 0) return byLiters;
-    // ลิตรเท่ากัน → ใช้ลำดับที่ปรากฏก่อน เพื่อให้ผลลัพธ์คงที่ทุกครั้ง
-    return order.indexOf(a.typeId).compareTo(order.indexOf(b.typeId));
-  });
-
-  return result;
-}
-
 // =====================================================================
 // 📸 WaterSnapshot — ภาพรวมสถานะระบบ ณ ขณะหนึ่ง ใช้เป็นบริบทให้ Gemini
 // =====================================================================
@@ -114,7 +38,6 @@ class WaterSnapshot {
   final double flowRate; // ลิตร/นาที
   final double usedToday; // ลิตร
   final List<HourlyUsage> hourlyToday;
-  final List<ActivityEntry> activitiesToday;
   /// ค่าเฉลี่ยการใช้น้ำต่อวัน — คิดจาก "วันเต็มวัน" เท่านั้น (ไม่นับวันนี้)
   final double averageDailyLiters;
   /// จำนวน "วันเต็มวัน" ที่มีข้อมูลในประวัติ (ไม่นับวันนี้)
@@ -130,7 +53,6 @@ class WaterSnapshot {
     required this.flowRate,
     required this.usedToday,
     required this.hourlyToday,
-    required this.activitiesToday,
     required this.averageDailyLiters,
     required this.recordedDays,
     required this.peakDayLabel,
@@ -180,7 +102,6 @@ class WaterSnapshot {
     flowRate: 0,
     usedToday: 0,
     hourlyToday: <HourlyUsage>[],
-    activitiesToday: <ActivityEntry>[],
     averageDailyLiters: 0,
     recordedDays: 0,
     peakDayLabel: null,
@@ -261,17 +182,6 @@ class WaterSnapshot {
       }
     }
 
-    if (activitiesToday.isNotEmpty) {
-      b.writeln();
-      b.writeln('กิจกรรมวันนี้ (${activitiesToday.length} รายการ ล่าสุดก่อน):');
-      for (final a in activitiesToday) {
-        b.writeln(
-          '  ${a.timeLabel} น. ${a.label} '
-          '${a.liters.toStringAsFixed(0)} ลิตร',
-        );
-      }
-    }
-
     return b.toString();
   }
 }
@@ -279,7 +189,7 @@ class WaterSnapshot {
 // =====================================================================
 // 👂 WaterContextWatcher — ดักฟัง Firebase แล้วส่ง WaterSnapshot ออกมา
 //    ฟังที่ปมราก 'water_system' ครั้งเดียว ได้ข้อมูลครบทุกส่วน
-//    (monitor + setting + history + activities) เหมือนที่ watertank.dart ทำ
+//    (monitor + setting + history) เหมือนที่ watertank.dart ทำ
 // =====================================================================
 class WaterContextWatcher {
   final DatabaseReference _rootRef = FirebaseDatabase.instance.ref(
@@ -389,27 +299,6 @@ class WaterContextWatcher {
       final double averageDaily =
           recordedDays > 0 ? totalFullDays / recordedDays : 0;
 
-      // ---------- กิจกรรมของวันนี้ ----------
-      final List<ActivityEntry> activities = <ActivityEntry>[];
-      final rawActivities = root['activities'];
-      if (rawActivities is Map) {
-        final am = Map<dynamic, dynamic>.from(rawActivities);
-        for (final key in am.keys) {
-          final value = am[key];
-          if (value is! Map) continue;
-          final ts = _toInt(value['timestamp']);
-          if (!_isTodayMillis(ts)) continue;
-          activities.add(
-            ActivityEntry(
-              typeId: (value['type'] ?? '').toString(),
-              liters: _toDouble(value['liters'], 0),
-              timestamp: ts,
-            ),
-          );
-        }
-        activities.sort((a, b) => b.timestamp.compareTo(a.timestamp));
-      }
-
       return WaterSnapshot(
         capacity: capacity,
         tankDepth: tankDepth,
@@ -417,7 +306,6 @@ class WaterContextWatcher {
         flowRate: flowRate,
         usedToday: usedToday,
         hourlyToday: hourly,
-        activitiesToday: activities,
         averageDailyLiters: averageDaily,
         recordedDays: recordedDays,
         peakDayLabel: peakDayLabel,
@@ -439,22 +327,9 @@ class WaterContextWatcher {
     return fallback;
   }
 
-  static int _toInt(dynamic value) {
-    if (value is num) return value.toInt();
-    if (value is String) return int.tryParse(value) ?? 0;
-    return 0;
-  }
-
   static bool _isDateKey(String key) {
     if (key.length != 10) return false;
     return DateTime.tryParse(key) != null;
-  }
-
-  static bool _isTodayMillis(int millis) {
-    if (millis <= 0) return false;
-    final d = DateTime.fromMillisecondsSinceEpoch(millis);
-    final now = DateTime.now();
-    return d.year == now.year && d.month == now.month && d.day == now.day;
   }
 
   static String _todayKey() {

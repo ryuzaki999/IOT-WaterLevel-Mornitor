@@ -19,7 +19,7 @@ import 'water_tips.dart';
 //       (ไม่ต้องพิมพ์คำถามเอง — หน้านี้เป็นแดชบอร์ดสรุปผล)
 //    3. แสดงผลเป็นการ์ด "AI วิเคราะห์การใช้น้ำ" (ประโยคสรุปบรรทัดเดียวที่คำนวณ
 //       จากข้อมูลเซ็นเซอร์เอง) / การ์ดสถิติ / การ์ดคาดการณ์จาก AI 5 วัน /
-//       การ์ด "สรุปการใช้น้ำ" (กิจกรรมที่ใช้มาก/น้อยสุด + ประโยคสรุปตามเกณฑ์น้ำ)
+//       การ์ด "สรุปการใช้น้ำ" (ประโยคสรุปตามเกณฑ์น้ำ)
 //    4. บทวิเคราะห์แสดงอยู่บนหน้า AI เท่านั้น (การแจ้งเตือนอัตโนมัติแยกไปที่
 //       notification_service.dart ซึ่งเฝ้าดูเกณฑ์ระดับน้ำ/อัตราไหลเอง)
 //
@@ -28,7 +28,7 @@ import 'water_tips.dart';
 //    ตลอดอายุแอป และบน Web ทุกแท็บที่เปิดค้าง/ทุกรอบ hot restart คือ
 //    อินสแตนซ์ใหม่ แอปจึง "ไม่ยิงมั่ว": ทุกครั้งจะถาม ai_policy.dart ก่อน
 //      • ครบ kAiAutoIntervalMinutes (60 นาที) จากครั้งล่าสุดที่ส่งคำขอ
-//      • ข้อมูลเปลี่ยนจริง (เปอร์เซ็นต์/อัตราไหล/มีกิจกรรมใหม่)
+//      • ข้อมูลเปลี่ยนจริง (เปอร์เซ็นต์/อัตราไหล)
 //      • ไม่ได้ยิงค้างอยู่ + มี API Key + มีข้อมูลจากเซ็นเซอร์
 //    สถานะล่าสุดเก็บที่ water_system/ai_state (schema อยู่ใน ai_policy.dart)
 //    ทุกแท็บ/ทุกอุปกรณ์จึงใช้สถานะร่วมกัน → เปิดซ้ำ/รีสตาร์ทก็ไม่ยิงซ้ำ
@@ -49,8 +49,8 @@ class AiPage extends StatefulWidget {
 const String _systemPrompt =
     'คุณคือผู้ช่วยวิเคราะห์ระบบถังเก็บน้ำและพฤติกรรมการใช้น้ำของบ้านพักอาศัยในประเทศไทย '
     'ตอบเป็นภาษาไทยเสมอ กระชับ ตรงประเด็น ใช้ตัวเลขจากข้อมูลจริงที่ให้มา '
-    'ให้อ่านพฤติกรรมการใช้น้ำจากข้อมูลรายชั่วโมง กิจกรรมวันนี้ และค่าเฉลี่ยรายวัน '
-    'ส่วนการคาดการณ์ ให้ประเมินแนวโน้มจากค่าเฉลี่ย + การใช้วันนี้ + รายชั่วโมง + กิจกรรม '
+    'ให้อ่านพฤติกรรมการใช้น้ำจากข้อมูลรายชั่วโมงและค่าเฉลี่ยรายวัน '
+    'ส่วนการคาดการณ์ ให้ประเมินแนวโน้มจากค่าเฉลี่ย + การใช้วันนี้ + รายชั่วโมง '
     'ถ้าข้อมูลไม่พอให้บอกตรงๆ ว่าขาดข้อมูลอะไร อย่าเดาตัวเลขขึ้นเอง';
 
 /// 🎯 คำสั่งวิเคราะห์พฤติกรรมการใช้น้ำปัจจุบัน (ใช้ทั้งตอนเปิดหน้าครั้งแรกและกดวิเคราะห์ใหม่)
@@ -60,7 +60,7 @@ const String _analysisRequest =
     'แล้วตอบตามรูปแบบนี้เท่านั้น (เรียงบล็อกตามนี้ ห้ามสลับหรือเพิ่มหัวข้ออื่น)\n'
     '$kSummaryHeader\n'
     '(2-3 ประโยค: น้ำเหลือพอใช้ได้อีกกี่วัน ควรเติมเมื่อไหร่ '
-    'พร้อมสะท้อนพฤติกรรม เช่น ช่วงเวลาที่ใช้น้ำมากสุด กิจกรรมที่กินน้ำมากสุด '
+    'พร้อมสะท้อนพฤติกรรม เช่น ช่วงเวลาที่ใช้น้ำมากสุด '
     'และการใช้วันนี้เทียบกับค่าเฉลี่ยรายวัน โดยใส่ตัวเลขจริงจากข้อมูล)\n'
     '$kForecastHeader\n'
     'วัน|1|<เปอร์เซ็นต์ 0-100>|<critical|warning|info>|<เหตุผลสั้นไม่เกิน 12 คำ>\n'
@@ -78,8 +78,8 @@ const String _analysisRequest =
     '- คำแนะนำข้อที่ 2\n'
     '- คำแนะนำข้อที่ 3\n'
     '(แต่ละข้อไม่เกิน 12 คำ เน้นสิ่งที่เจ้าของบ้านทำได้จริงเพื่อประหยัดน้ำ '
-    'ให้อิงพฤติกรรมที่พบจากรายชั่วโมง/กิจกรรม และต้องอ้างอิงตัวเลขหรือเกณฑ์ '
-    'จากข้อมูลที่ให้มา ห้ามคิดค่าขึ้นเอง ถ้าไม่มีข้อมูลรายชั่วโมงหรือกิจกรรม '
+    'ให้อิงพฤติกรรมที่พบจากรายชั่วโมง และต้องอ้างอิงตัวเลขหรือเกณฑ์ '
+    'จากข้อมูลที่ให้มา ห้ามคิดค่าขึ้นเอง ถ้าไม่มีข้อมูลรายชั่วโมง '
     'ให้บอกตรงๆ ว่าข้อมูลไม่พอ)';
 
 /// 📏 ความสูงของพื้นที่แท่งกราฟคาดการณ์ (พิกเซล) — แท่งที่ 100% จะสูงเต็มพื้นที่นี้
@@ -214,7 +214,6 @@ class _AiPageState extends State<AiPage> {
     required String? forecastRaw,
     required double percent,
     required double flowRate,
-    required int activityTs,
   }) async {
     final int nowMs = DateTime.now().millisecondsSinceEpoch;
 
@@ -226,7 +225,6 @@ class _AiPageState extends State<AiPage> {
           lastSuccessAt: nowMs,
           lastPercent: percent,
           lastFlow: flowRate,
-          lastActivityTs: activityTs,
           lastNarrative: narrative,
           lastTips: tips,
           lastForecast: forecastRaw,
@@ -239,7 +237,6 @@ class _AiPageState extends State<AiPage> {
         'last_success_at': ServerValue.timestamp,
         'last_percent': percent,
         'last_flow': flowRate,
-        'last_activity_ts': activityTs,
         'last_narrative': narrative,
         'last_tips': tips.join('\n'),
         'last_forecast': forecastRaw,
@@ -292,7 +289,6 @@ class _AiPageState extends State<AiPage> {
             isAnalyzing: _isAnalyzing,
             percent: _snapshot.percent,
             flowRate: _snapshot.flowRate,
-            lastActivityTs: _lastActivityTs,
           )
         : aiManualDecision(
             state: _aiState,
@@ -348,7 +344,6 @@ class _AiPageState extends State<AiPage> {
     // จำค่า ณ ตอนที่ยิง ไว้บันทึกเป็นเกณฑ์เทียบ "ข้อมูลเปลี่ยนไหม" ครั้งถัดไป
     final double percentAtCall = _snapshot.percent;
     final double flowAtCall = _snapshot.flowRate;
-    final int activityAtCall = _lastActivityTs;
 
     try {
       final String reply = await _gemini.generateAdvice(
@@ -377,7 +372,6 @@ class _AiPageState extends State<AiPage> {
         forecastRaw: forecastRaw,
         percent: percentAtCall,
         flowRate: flowAtCall,
-        activityTs: activityAtCall,
       );
     } on GeminiException catch (e) {
       _failWith(e.message);
@@ -468,14 +462,6 @@ class _AiPageState extends State<AiPage> {
       flowRate: s.flowRate,
       estimatedDaysRemaining: s.estimatedDaysRemaining,
     );
-  }
-
-  /// ⏱️ เวลาของกิจกรรมล่าสุดของวันนี้ (0 = ยังไม่มีกิจกรรม)
-  /// parseSnapshot เรียงจากใหม่ → เก่าแล้ว จึงใช้ตัวแรกได้เลย
-  int get _lastActivityTs {
-    final List<ActivityEntry> items = _snapshot.activitiesToday;
-    if (items.isEmpty) return 0;
-    return items.first.timestamp;
   }
 
   // ==================================================================
@@ -1109,9 +1095,7 @@ class _AiPageState extends State<AiPage> {
 
   // ------------------------------------------------------------------
   // 📋 การ์ด "สรุปการใช้น้ำ" — แสดงตลอด (เว้นแต่ยังไม่มีข้อมูลจากเซ็นเซอร์)
-  //      1) กิจกรรมที่ใช้น้ำรวมมากที่สุด / น้อยที่สุดของวันนี้ (บรรทัดละกิจกรรม
-  //         ไม่แสดงตัวเลข — ผลรวมลิตรคำนวณที่ water_context.dart)
-  //      2) ประโยคสรุปบรรทัดเดียวจากเกณฑ์ระดับน้ำ (water_tips.dart)
+  //      ประโยคสรุปบรรทัดเดียวจากเกณฑ์ระดับน้ำ (water_tips.dart)
   // ------------------------------------------------------------------
   Widget _buildTipsCard() {
     final WaterTipsResult result = _tipsResult;
@@ -1159,75 +1143,10 @@ class _AiPageState extends State<AiPage> {
             ],
           ),
           const SizedBox(height: 12),
-          // 🏆 สรุปกิจกรรมการใช้น้ำวันนี้ (มากที่สุด / น้อยที่สุด — ไม่มีตัวเลข)
-          ..._activitySummaryLines(),
-          const SizedBox(height: 12),
           // ประโยคเดียว — สถานะน้ำ (%, ลิตร, วันที่ใช้ได้) + คำแนะนำตามเกณฑ์ระดับน้ำ
           _statusCallout(primary.text, levelKey, accent),
         ],
       ),
-    );
-  }
-
-  /// 🏆 บรรทัดสรุปกิจกรรมการใช้น้ำของวันนี้ (มากที่สุด / น้อยที่สุด)
-  ///    • ไม่แสดงตัวเลข — บอกแค่ชื่อกิจกรรม
-  ///    • กิจกรรมละบรรทัด (มากที่สุดขึ้นก่อน)
-  ///    • ยังไม่มีกิจกรรม → บอกว่าไม่มีข้อมูล / มีประเภทเดียว → บอกกิจกรรมนั้น
-  List<Widget> _activitySummaryLines() {
-    final List<ActivityUsage> ranked = summarizeActivitiesByType(
-      _snapshot.activitiesToday,
-    );
-
-    if (ranked.isEmpty) {
-      return <Widget>[
-        _activityLine(
-          Icons.insights_outlined,
-          'วันนี้ยังไม่มีการบันทึกกิจกรรมการใช้น้ำ',
-        ),
-      ];
-    }
-
-    if (ranked.length == 1) {
-      return <Widget>[
-        _activityLine(
-          Icons.water_drop_outlined,
-          'วันนี้ใช้น้ำกับกิจกรรม ${ranked.first.label}',
-        ),
-      ];
-    }
-
-    return <Widget>[
-      _activityLine(
-        Icons.trending_up_rounded,
-        'กิจกรรมที่ใช้น้ำมากที่สุด: ${ranked.first.label}',
-      ),
-      const SizedBox(height: 6),
-      _activityLine(
-        Icons.trending_down_rounded,
-        'กิจกรรมที่ใช้น้ำน้อยที่สุด: ${ranked.last.label}',
-      ),
-    ];
-  }
-
-  /// 📄 หนึ่งบรรทัดของสรุปกิจกรรม (ไอคอนนำ + ข้อความ ไม่มีตัวเลข)
-  Widget _activityLine(IconData icon, String text) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: <Widget>[
-        Icon(icon, size: 15, color: const Color(0xFF7C5CFF)),
-        const SizedBox(width: 8),
-        Expanded(
-          child: Text(
-            text,
-            style: const TextStyle(
-              fontSize: 12.5,
-              height: 1.4,
-              fontWeight: FontWeight.w600,
-              color: Color(0xFF37474F),
-            ),
-          ),
-        ),
-      ],
     );
   }
 
